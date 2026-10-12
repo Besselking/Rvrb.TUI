@@ -21,7 +21,10 @@ The token is saved to `~/.config/rvrb/token` (mode 600) and refreshed tokens fro
 - **Channels** (left): popular channels are listed; type in the box and press Enter to search. Enter on a channel joins it.
 - **Chat** (middle): the last 100 messages, then live messages.
 - **Message** (bottom): Enter sends. `/commands` are passed through to the server.
-- **Users** (right): ★ creator, @ admin, + moderator.
+- **DJs** (top right): the DJ queue in play order, the playing DJ first (▶).
+- **Listeners** (bottom right): everyone else in the channel.
+
+Quitting (Esc, closing the terminal, or `kill`) leaves the channel first.
 
 ## Project layout
 | File | Purpose |

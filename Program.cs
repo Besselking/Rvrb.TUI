@@ -7,6 +7,7 @@
 //     examples are v1 and will not compile. The canonical v2 patterns are in AGENTS.md.
 // -----------------------------------------------------------------------------
 
+using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
 using Rvrb;
 using Terminal.Gui.App;
@@ -59,6 +60,17 @@ using (IApplication app = Application.Create ().Init ())
 {
     using ChatWindow window = new (api, socket, me);
 
+    // Closing the terminal window (SIGHUP) or `kill` (SIGTERM) would end the process without leaving the channel;
+    // stop the app instead, so the normal exit path below runs.
+    void StopOnSignal (PosixSignalContext context)
+    {
+        context.Cancel = true;
+        app.Invoke (() => app.RequestStop ());
+    }
+
+    using PosixSignalRegistration sigHup = PosixSignalRegistration.Create (PosixSignal.SIGHUP, StopOnSignal);
+    using PosixSignalRegistration sigTerm = PosixSignalRegistration.Create (PosixSignal.SIGTERM, StopOnSignal);
+
     // Log anything that escapes a UI handler and keep running, rather than taking the terminal down with it.
     app.Run (window,
              ex =>
@@ -67,6 +79,9 @@ using (IApplication app = Application.Create ().Init ())
 
                  return true;
              });
+
+    // Otherwise the server keeps the account in the channel after we're gone.
+    window.LeaveChannelAsync ().GetAwaiter ().GetResult ();
 }
 
 socket.DisposeAsync ().AsTask ().GetAwaiter ().GetResult ();

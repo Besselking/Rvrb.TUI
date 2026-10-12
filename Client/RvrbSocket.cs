@@ -31,7 +31,7 @@ internal sealed class RvrbSocket (Session session) : IAsyncDisposable
     public void Start () => _loop = Task.Run (() => RunAsync (_cts.Token));
 
     /// <summary>Sends a request and waits for its response; throws <see cref="RvrbException"/> on an error reply.</summary>
-    public async Task<JsonNode?> RequestAsync (string method, JsonObject? @params = null)
+    public async Task<JsonNode?> RequestAsync (string method, JsonObject? @params = null, TimeSpan? timeout = null)
     {
         int id = Interlocked.Increment (ref _nextId);
         TaskCompletionSource<JsonNode?> tcs = new (TaskCreationOptions.RunContinuationsAsynchronously);
@@ -48,7 +48,7 @@ internal sealed class RvrbSocket (Session session) : IAsyncDisposable
 
             await SendAsync (message.ToJsonString ());
 
-            return await tcs.Task.WaitAsync (TimeSpan.FromSeconds (15));
+            return await tcs.Task.WaitAsync (timeout ?? TimeSpan.FromSeconds (15));
         }
         catch (TimeoutException)
         {

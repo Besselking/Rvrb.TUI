@@ -33,9 +33,15 @@ internal sealed class ChatWindow : Window
 #pragma warning restore CS0618
     private readonly TextField _input;
 
-    private readonly ListView _userList;
-    private readonly ObservableCollection<string> _userItems = [];
+    private readonly FrameView _djsFrame;
+    private readonly ObservableCollection<string> _djItems = [];
+    private readonly FrameView _listenersFrame;
+    private readonly ObservableCollection<string> _listenerItems = [];
     private readonly Dictionary<string, string> _names = [];
+
+    // Users in the channel (sorted by role, then name) and the DJ ids in play order: the first is playing.
+    private List<(string Id, string Name, int Role)> _users = [];
+    private List<string> _djs = [];
 
     private readonly List<(long SyncTime, string Key, string Text, bool Dim)> _lines = [];
     private readonly HashSet<string> _seen = [];
@@ -118,20 +124,34 @@ internal sealed class ChatWindow : Window
         _input = new () { Width = Dim.Fill () };
         inputFrame.Add (_input);
 
-        FrameView usersFrame = new ()
+        // The DJ queue sits above the listeners and grows with the queue (see RefreshPeople).
+        _djsFrame = new ()
         {
-            Title = "Users",
+            Title = "DJs",
             X = Pos.AnchorEnd (UsersWidth),
             Y = 0,
+            Width = UsersWidth,
+            Height = 3
+        };
+
+        ListView djList = new () { Width = Dim.Fill (), Height = Dim.Fill () };
+        djList.SetSource (_djItems);
+        _djsFrame.Add (djList);
+
+        _listenersFrame = new ()
+        {
+            Title = "Listeners",
+            X = Pos.AnchorEnd (UsersWidth),
+            Y = Pos.Bottom (_djsFrame),
             Width = UsersWidth,
             Height = Dim.Fill ()
         };
 
-        _userList = new () { Width = Dim.Fill (), Height = Dim.Fill () };
-        _userList.SetSource (_userItems);
-        usersFrame.Add (_userList);
+        ListView listenerList = new () { Width = Dim.Fill (), Height = Dim.Fill () };
+        listenerList.SetSource (_listenerItems);
+        _listenersFrame.Add (listenerList);
 
-        Add (channelsFrame, _chatFrame, inputFrame, usersFrame);
+        Add (channelsFrame, _chatFrame, inputFrame, _djsFrame, _listenersFrame);
 
         // Enter in a TextField raises Accepting; handle it so it doesn't bubble up to the window.
         _search.Accepting += (_, e) =>
@@ -178,6 +198,13 @@ internal sealed class ChatWindow : Window
                            _normal = frame.Normal;
                            _dim = new Attribute (frame.Normal.Foreground, frame.Normal.Background, TextStyle.Faint);
 
+                           DimBorder (this);
+
+                           foreach (View view in SubViews.OfType<FrameView> ())
+                           {
+                               DimBorder (view);
+                           }
+
                            AddSystemLine ("Pick a channel on the left and press Enter. Esc quits.");
                            _socket.Start ();
                            _ = LoadChannelsAsync (null);
@@ -185,6 +212,42 @@ internal sealed class ChatWindow : Window
     }
 
     private void Ui (Action action) => App?.Invoke (action);
+
+    /// <summary>Leaves the joined channel; called on exit. Waits briefly for the server, and never throws.</summary>
+    public async Task LeaveChannelAsync ()
+    {
+        if (_channelId is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _socket.RequestAsync ("leave", timeout: TimeSpan.FromSeconds (3));
+        }
+        catch
+        {
+            // Offline or already removed: the server drops the user on its own a few seconds after disconnecting.
+        }
+
+        _channelId = null;
+    }
+
+    /// <summary>
+    ///     Draws a view's border (and its title) faint. Borders are drawn by a separate BorderView, so it gets its
+    ///     own scheme and the content keeps the normal colours.
+    /// </summary>
+    private static void DimBorder (View view)
+    {
+        if (view.Border.GetOrCreateView () is not { } border)
+        {
+            return;
+        }
+
+        Scheme scheme = border.GetScheme ();
+        Attribute dim = new (scheme.Normal.Foreground, scheme.Normal.Background, TextStyle.Faint);
+        border.SetScheme (new (scheme) { Normal = dim, Focus = dim });
+    }
 
     private void UpdateTitle () => Title = $"RVRB — {_me} — {_status}";
 
@@ -236,6 +299,13 @@ internal sealed class ChatWindow : Window
             return;
         }
 
+        // Reset the people panels before joining: the server sends the users and DJs right after its reply to
+        // join, which can be handled before the code after the await runs.
+        _users = [];
+        _names.Clear ();
+        _djs = (channel ["djs"] as JsonArray)?.Select (d => d.Str ()).OfType<string> ().ToList () ?? [];
+        RefreshPeople ();
+
         try
         {
             if (_channelId is { })
@@ -263,8 +333,6 @@ internal sealed class ChatWindow : Window
                 _lines.Clear ();
                 _seen.Clear ();
                 _follow = true;
-                _userItems.Clear ();
-                _names.Clear ();
 
                 if (channel ["greeting"].Str () is { Length: > 0 } greeting)
                 {
@@ -376,6 +444,15 @@ internal sealed class ChatWindow : Window
 
                 break;
 
+            case "updateChannelDjs":
+                if (p? ["djs"] is JsonArray djs)
+                {
+                    _djs = djs.Select (d => d.Str ()).OfType<string> ().ToList ();
+                    RefreshPeople ();
+                }
+
+                break;
+
             case "clearChannelMessages":
                 if (p? ["syncTime"] is JsonArray times)
                 {
@@ -400,7 +477,9 @@ internal sealed class ChatWindow : Window
                     _channelId = null;
                     _channelTitle = null;
                     _chatFrame.Title = "Chat";
-                    _userItems.Clear ();
+                    _users = [];
+                    _djs = [];
+                    RefreshPeople ();
                 }
 
                 break;
@@ -422,21 +501,40 @@ internal sealed class ChatWindow : Window
             return;
         }
 
-        var sorted = users.OfType<JsonObject> ()
-                          .Select (u => (Id: u ["_id"].Str () ?? "",
-                                         Name: u ["displayName"].Str () is { Length: > 0 } d ? d : u ["userName"].Str () ?? "?",
-                                         Role: u ["role"].Int () ?? 0))
-                          .OrderByDescending (u => u.Role)
-                          .ThenBy (u => u.Name, StringComparer.OrdinalIgnoreCase)
-                          .ToList ();
+        _users = users.OfType<JsonObject> ()
+                      .Select (u => (Id: u ["_id"].Str () ?? "",
+                                     Name: u ["displayName"].Str () is { Length: > 0 } d ? d : u ["userName"].Str () ?? "?",
+                                     Role: u ["role"].Int () ?? 0))
+                      .OrderByDescending (u => u.Role)
+                      .ThenBy (u => u.Name, StringComparer.OrdinalIgnoreCase)
+                      .ToList ();
 
         _names.Clear ();
-        _userItems.Clear ();
 
-        foreach ((string id, string name, int role) in sorted)
+        foreach ((string id, string name, _) in _users)
         {
             _names [id] = name;
+        }
 
+        RefreshPeople ();
+    }
+
+    /// <summary>Fills the DJ queue (playing DJ first, marked ▶) and the listeners (everyone not on the decks).</summary>
+    private void RefreshPeople ()
+    {
+        _djItems.Clear ();
+
+        for (var i = 0; i < _djs.Count; i++)
+        {
+            string name = _names.TryGetValue (_djs [i], out string? n) ? n : "(unknown)";
+            _djItems.Add ($"{(i == 0 ? "▶" : $"{i + 1}.")} {name}");
+        }
+
+        HashSet<string> onDecks = [.. _djs];
+        _listenerItems.Clear ();
+
+        foreach ((string id, string name, int role) in _users.Where (u => !onDecks.Contains (u.Id)))
+        {
             string badge = role switch
                            {
                                >= 10 => "★ ",
@@ -444,8 +542,14 @@ internal sealed class ChatWindow : Window
                                >= 3 => "+ ",
                                _ => "  "
                            };
-            _userItems.Add (badge + name);
+            _listenerItems.Add (badge + name);
         }
+
+        _djsFrame.Title = $"DJs ({_djs.Count})";
+        _listenersFrame.Title = $"Listeners ({_listenerItems.Count})";
+
+        // Room for every DJ up to 10 rows (plus the border), and at least one row so the frame stays visible.
+        _djsFrame.Height = Math.Clamp (_djs.Count, 1, 10) + 2;
     }
 
     private void AddMessage (JsonNode? message, bool render)
