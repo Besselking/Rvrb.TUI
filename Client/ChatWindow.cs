@@ -44,6 +44,11 @@ internal sealed class ChatWindow : Window
     private Attribute? _normal;
     private Attribute? _dim;
 
+    // The log follows new messages until the user scrolls up, and follows again once they scroll back to the bottom.
+    private bool _follow = true;
+    private bool _rendering;
+    private int _lastTop;
+
     private string? _channelId;
     private string? _channelTitle;
     private string _status = "starting…";
@@ -80,6 +85,26 @@ internal sealed class ChatWindow : Window
 
         _log = new () { Width = Dim.Fill (), Height = Dim.Fill (), ReadOnly = true, WordWrap = true };
         _chatFrame.Add (_log);
+
+        _log.ViewportChanged += (_, _) =>
+                                {
+                                    if (_rendering)
+                                    {
+                                        return;
+                                    }
+
+                                    if (_log.Viewport.Y != _lastTop)
+                                    {
+                                        // The user scrolled (keys or mouse wheel).
+                                        _lastTop = _log.Viewport.Y;
+                                        _follow = IsAtBottom ();
+                                    }
+                                    else if (_follow && !IsAtBottom ())
+                                    {
+                                        // Resized while following: stay pinned to the bottom.
+                                        ScrollLog (toBottom: true, top: 0);
+                                    }
+                                };
 
         FrameView inputFrame = new ()
         {
@@ -237,6 +262,7 @@ internal sealed class ChatWindow : Window
                 _chatFrame.Title = _channelTitle;
                 _lines.Clear ();
                 _seen.Clear ();
+                _follow = true;
                 _userItems.Clear ();
                 _names.Clear ();
 
@@ -359,6 +385,7 @@ internal sealed class ChatWindow : Window
                 else
                 {
                     _lines.Clear ();
+                    _follow = true;
                     AddSystemLine ("Chat was cleared.");
                 }
 
@@ -481,7 +508,8 @@ internal sealed class ChatWindow : Window
 
     private void Render ()
     {
-        if (_lines.Count > MaxLines)
+        // Only trim while following, so lines don't shift under a user who scrolled up to read.
+        if (_follow && _lines.Count > MaxLines)
         {
             _lines.RemoveRange (0, _lines.Count - MaxLines);
         }
@@ -503,9 +531,41 @@ internal sealed class ChatWindow : Window
             cells.Add (Cell.ToCellList (" ", _normal));
         }
 
-        // Load() checks the cursor's old position against the new content; park it at 0,0 first.
-        _log.MoveHome ();
-        _log.Load (cells);
-        _log.MoveEnd ();
+        int top = _log.Viewport.Y;
+        _rendering = true;
+
+        try
+        {
+            // Load() checks the cursor's old position against the new content; park it at 0,0 first.
+            _log.MoveHome ();
+            _log.Load (cells);
+
+            // MoveEnd() makes the TextView re-wrap the new content, so the content height below is right.
+            _log.MoveEnd ();
+        }
+        finally
+        {
+            _rendering = false;
+        }
+
+        ScrollLog (_follow, top);
+    }
+
+    private bool IsAtBottom () => _log.Viewport.Y + _log.Viewport.Height >= _log.GetContentSize ().Height;
+
+    private void ScrollLog (bool toBottom, int top)
+    {
+        int bottom = Math.Max (0, _log.GetContentSize ().Height - _log.Viewport.Height);
+        _rendering = true;
+
+        try
+        {
+            _log.Viewport = _log.Viewport with { Y = toBottom ? bottom : Math.Min (top, bottom) };
+            _lastTop = _log.Viewport.Y;
+        }
+        finally
+        {
+            _rendering = false;
+        }
     }
 }
