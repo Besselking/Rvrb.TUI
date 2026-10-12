@@ -1,7 +1,7 @@
 # RVRB TUI
 
 A terminal client for [RVRB](https://app.rvrb.one), built with [Terminal.Gui](https://github.com/tui-cs/Terminal.Gui) **v2**:
-chat, and the channel's music played on one of your Spotify devices. No voting or DJing (yet).
+chat, DJing from your RVRB queue, and the channel's music played on one of your Spotify devices. No voting (yet).
 
 ```bash
 dotnet run             # launch (Esc quits)
@@ -21,6 +21,9 @@ The token is saved to `~/.config/rvrb/token` (mode 600) and refreshed tokens fro
 - **F2 Channels**: opens at startup. Popular channels are listed; type and press Enter to search, Enter again joins.
 - **F3 Device**: the Spotify device to play on (also saved as your preferred device on RVRB).
 - **F4 Playback**: turns playing the channel's tracks on your device on or off (on by default).
+- **F5 Queue**: your RVRB DJ queue. Enter plays a track next, Shift+↑/↓ moves it, Del removes it, `a` adds tracks.
+- **F6 Add tracks**: Spotify search; Enter in the box searches, Enter on a result adds it to the bottom of your queue.
+- **F7 Step up / Step down**: join or leave the decks. While you DJ, your turn plays the top of your queue.
 - **Now playing** (top): track, DJ, votes (▲ dope ▼ nope ★ star) and progress.
 - **Chat** (middle): the last 100 messages, then live messages.
 - **Message** (bottom): Enter sends. `/commands` are passed through to the server.
@@ -46,6 +49,8 @@ Spotify only lists devices that are running, and controlling playback needs Spot
 | `Client/ChatWindow.cs` | The main window. |
 | `Client/NowPlayingView.cs` | Track, DJ, votes and progress bar. |
 | `Client/Pickers.cs` | Channel and Spotify device dialogs. |
+| `Client/TrackQueue.cs` | The DJ queue (the stack with `activeQueue`), cached for answering `nextChannelTrack`. |
+| `Client/QueueDialogs.cs` | Queue and Spotify search dialogs. |
 | `AGENTS.md` | **Canonical Terminal.Gui v2 patterns + gotchas.** Read before editing UI code. |
 
 API docs: [openapi.yaml](https://app.rvrb.one/api-docs/openapi.yaml) (REST), [asyncapi.yaml](https://app.rvrb.one/api-docs/asyncapi.yaml) (websocket).

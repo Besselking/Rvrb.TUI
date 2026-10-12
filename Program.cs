@@ -17,6 +17,7 @@ using Terminal.Gui.Configuration;
 string? token = args.Contains ("--login") ? null : Environment.GetEnvironmentVariable ("RVRB_TOKEN") ?? Session.LoadSavedToken ();
 Session? session = null;
 string me = "";
+string myId = "";
 
 while (session is null)
 {
@@ -35,6 +36,7 @@ while (session is null)
         JsonNode login = probe.LoginAsync ().GetAwaiter ().GetResult ();
         JsonNode? user = login ["user"];
         me = user? ["displayName"].Str () is { Length: > 0 } d ? d : user? ["userName"].Str () ?? "?";
+        myId = user? ["_id"].Str () ?? "";
         session = candidate;
     }
     catch (RvrbAuthException)
@@ -58,7 +60,7 @@ ConfigurationManager.Enable (ConfigLocations.All);
 
 using (IApplication app = Application.Create ().Init ())
 {
-    using ChatWindow window = new (api, socket, me);
+    using ChatWindow window = new (api, socket, me, myId);
 
     // Closing the terminal window (SIGHUP) or `kill` (SIGTERM) would end the process without leaving the channel;
     // stop the app instead, so the normal exit path below runs.

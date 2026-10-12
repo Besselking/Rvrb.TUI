@@ -10,6 +10,7 @@ internal sealed class NowPlayingView : FrameView
     private readonly Label _track;
     private readonly ProgressBar _progress;
     private readonly Label _time;
+    private readonly Label _upNext;
 
     private string _title = "";
     private string? _dj;
@@ -25,10 +26,15 @@ internal sealed class NowPlayingView : FrameView
         _time = new () { X = Pos.AnchorEnd (13), Y = 1, Width = 13, Text = "" };
         _progress = new () { X = 0, Y = 1, Width = Dim.Fill (14), ProgressBarStyle = ProgressBarStyle.Continuous };
 
-        Add (_track, _progress, _time);
+        _upNext = new () { X = 0, Y = 2, Width = Dim.Fill (), Text = "" };
+
+        Add (_track, _progress, _time, _upNext);
     }
 
     public bool IsPlaying => _durationMs > 0;
+
+    /// <summary>The top of the user's own queue: what they play when it's their turn.</summary>
+    public void SetUpNext (string text) => _upNext.Text = text;
 
     /// <summary>
     ///     From `playChannelTrack`. The server's clock can differ from ours, so its `syncTime` (the server's time

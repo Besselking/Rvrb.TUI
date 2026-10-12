@@ -21,10 +21,13 @@ internal sealed class ChatWindow : Window
     private readonly RvrbApi _api;
     private readonly RvrbSocket _socket;
     private readonly Player _player;
+    private readonly TrackQueue _queue;
     private readonly string _me;
+    private readonly string _myId;
 
     private readonly NowPlayingView _nowPlaying;
     private readonly Shortcut _playbackShortcut;
+    private readonly Shortcut _djShortcut;
     private readonly FrameView _chatFrame;
 
     // TextView is marked obsolete in favour of tui-cs/Editor, but it is still the built-in view with word wrap.
@@ -58,17 +61,22 @@ internal sealed class ChatWindow : Window
     private string? _channelId;
     private string? _channelTitle;
     private JsonNode? _pendingJoin;
+
+    // The track this client last gave the server for its turn; taken off the queue once it starts playing.
+    private string? _answeredTrackId;
     private string _status = "starting…";
 
-    public ChatWindow (RvrbApi api, RvrbSocket socket, string me)
+    public ChatWindow (RvrbApi api, RvrbSocket socket, string me, string myId)
     {
         _api = api;
         _socket = socket;
         _player = new (socket);
+        _queue = new (api);
         _me = me;
+        _myId = myId;
         UpdateTitle ();
 
-        _nowPlaying = new () { X = 0, Y = 0, Width = Dim.Fill (UsersWidth), Height = 4 };
+        _nowPlaying = new () { X = 0, Y = 0, Width = Dim.Fill (UsersWidth), Height = 5 };
 
         // Leave 3 rows for the message box and 1 for the status bar.
         _chatFrame = new ()
@@ -147,8 +155,11 @@ internal sealed class ChatWindow : Window
         Shortcut channels = new () { Title = "Channels", Key = Key.F2, BindKeyToApplication = true, Action = ShowChannelPicker };
         Shortcut device = new () { Title = "Device", Key = Key.F3, BindKeyToApplication = true, Action = ShowDevicePicker };
         _playbackShortcut = new () { Key = Key.F4, BindKeyToApplication = true, Action = TogglePlayback };
+        Shortcut queue = new () { Title = "Queue", Key = Key.F5, BindKeyToApplication = true, Action = ShowQueue };
+        Shortcut search = new () { Title = "Add tracks", Key = Key.F6, BindKeyToApplication = true, Action = ShowSearch };
+        _djShortcut = new () { Title = "Step up", Key = Key.F7, BindKeyToApplication = true, Action = () => _ = ToggleDjAsync () };
         Shortcut quit = new () { Title = "Quit", Key = Key.Q.WithCtrl, BindKeyToApplication = true, Action = () => App?.RequestStop () };
-        statusBar.Add (channels, device, _playbackShortcut, quit);
+        statusBar.Add (channels, device, _playbackShortcut, queue, search, _djShortcut, quit);
         UpdatePlaybackShortcut ();
 
         Add (_nowPlaying, _chatFrame, inputFrame, _djsFrame, _listenersFrame, statusBar);
@@ -178,6 +189,8 @@ internal sealed class ChatWindow : Window
                                        }
                                    });
         _socket.Notification += (method, p) => Ui (() => OnNotification (method, p));
+        _queue.Changed += () => Ui (UpdateUpNext);
+        _socket.RequestHandler = AnswerServerAsync;
         _player.Error += message => Ui (() => AddSystemLine ($"Playback: {message} (F3 picks a Spotify device, F4 turns playback off)"));
 
         Initialized += (_, _) =>
@@ -205,6 +218,7 @@ internal sealed class ChatWindow : Window
 
                            AddSystemLine ("F2 picks a channel, F3 the Spotify device to play on, F4 turns playback on or off.");
                            _socket.Start ();
+                           _ = LoadQueueAsync ();
 
                            // Advance the progress bar.
                            App!.AddTimeout (TimeSpan.FromSeconds (1),
@@ -279,6 +293,105 @@ internal sealed class ChatWindow : Window
         _ = _player.SetEnabledAsync (enabled);
         UpdatePlaybackShortcut ();
         AddSystemLine (enabled ? "Playback on." : "Playback off: tracks are no longer played on your Spotify device.");
+    }
+
+    private void ShowQueue ()
+    {
+        using QueueDialog dialog = new (_api, _queue);
+        App!.Run (dialog);
+    }
+
+    private void ShowSearch ()
+    {
+        using SearchDialog dialog = new (_api, _queue);
+        App!.Run (dialog);
+    }
+
+    private async Task LoadQueueAsync ()
+    {
+        try
+        {
+            await _queue.ReloadAsync ();
+        }
+        catch (Exception ex)
+        {
+            Ui (() => AddSystemLine ($"Could not load your queue: {ex.Message}"));
+        }
+    }
+
+    private async Task RemovePlayedAsync (string trackId)
+    {
+        try
+        {
+            await _queue.RemovePlayedAsync (trackId);
+        }
+        catch (Exception ex)
+        {
+            Ui (() => AddSystemLine ($"Could not take the played track off your queue: {ex.Message}"));
+        }
+    }
+
+    private void UpdateUpNext () =>
+        _nowPlaying.SetUpNext (_queue.Next is { } next
+                                   ? $"Your next: {TrackQueue.Describe (next)}  (queue: {_queue.Total}, F5)"
+                                   : "Your queue is empty (F6 adds tracks)");
+
+    /// <summary>Joins or leaves the decks. On the decks, the server asks this client for tracks (see AnswerServerAsync).</summary>
+    private async Task ToggleDjAsync ()
+    {
+        if (_channelId is null)
+        {
+            AddSystemLine ("Join a channel first (F2).");
+
+            return;
+        }
+
+        bool onDecks = _djs.Contains (_myId);
+
+        if (!onDecks && _queue.Loaded && _queue.Total == 0)
+        {
+            AddSystemLine ("Your queue is empty: add tracks with F6 before stepping up.");
+
+            return;
+        }
+
+        try
+        {
+            await _socket.RequestAsync (onDecks ? "leaveDjs" : "joinDjs");
+        }
+        catch (Exception ex)
+        {
+            Ui (() => AddSystemLine ($"Could not step {(onDecks ? "down" : "up")}: {ex.Message}"));
+        }
+    }
+
+    /// <summary>
+    ///     The server's requests. `nextChannelTrack` comes when it's this DJ's turn and must be answered within
+    ///     2.5 seconds with the top of the queue, which is taken off the queue once it starts playing. An error
+    ///     answer takes the DJ off the decks, which is what should happen with an empty queue.
+    /// </summary>
+    private async Task<JsonNode> AnswerServerAsync (string method, JsonNode? p)
+    {
+        if (method != "nextChannelTrack")
+        {
+            throw new RvrbException ($"{method} is not supported");
+        }
+
+        if (!_queue.Loaded)
+        {
+            await _queue.ReloadAsync ().WaitAsync (TimeSpan.FromSeconds (2));
+        }
+
+        if (_queue.Next is not { } track)
+        {
+            Ui (() => AddSystemLine ("Your queue is empty, so you were taken off the decks. F6 adds tracks."));
+
+            throw new RvrbException ("The queue is empty");
+        }
+
+        _answeredTrackId = track ["id"].Str ();
+
+        return new JsonObject { ["track"] = track.DeepClone () };
     }
 
     private void UpdatePlaybackShortcut () => _playbackShortcut.Title = _player.Enabled ? "Playback: on" : "Playback: off";
@@ -501,6 +614,14 @@ internal sealed class ChatWindow : Window
 
             case "playChannelTrack":
                 _nowPlaying.SetTrack (p);
+
+                // Our answer to nextChannelTrack is playing: take it off the queue.
+                if (_answeredTrackId is { } answered && p? ["track"]? ["id"].Str () == answered)
+                {
+                    _answeredTrackId = null;
+                    _ = RemovePlayedAsync (answered);
+                }
+
                 _ = _player.OnChannelTrackAsync (p? ["track"]? ["uri"].Str (), serverPlays: p? ["playTrack"].Bool () == false);
 
                 break;
@@ -508,6 +629,11 @@ internal sealed class ChatWindow : Window
             case "pauseChannelTrack":
                 _nowPlaying.Clear ();
                 _ = _player.StopAsync ();
+
+                break;
+
+            case "refreshDjStack":
+                _ = LoadQueueAsync ();
 
                 break;
 
@@ -617,6 +743,7 @@ internal sealed class ChatWindow : Window
 
         _nowPlaying.SetDj (_djs.Count > 0 && _names.TryGetValue (_djs [0], out string? dj) ? dj : null);
 
+        _djShortcut.Title = _djs.Contains (_myId) ? "Step down" : "Step up";
         _djsFrame.Title = $"DJs ({_djs.Count})";
         _listenersFrame.Title = $"Listeners ({_listenerItems.Count})";
 

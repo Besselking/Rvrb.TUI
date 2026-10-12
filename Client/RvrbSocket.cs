@@ -236,9 +236,45 @@ internal sealed class RvrbSocket (Session session) : IAsyncDisposable
                 break;
 
             default:
-                Notification?.Invoke (method, obj ["params"]);
+                // A request from the server (today only nextChannelTrack) has an id and wants an answer.
+                if (obj ["id"] is { } requestId)
+                {
+                    _ = AnswerAsync (method, requestId.DeepClone (), obj ["params"]);
+                }
+                else
+                {
+                    Notification?.Invoke (method, obj ["params"]);
+                }
 
                 break;
+        }
+    }
+
+    /// <summary>Answers server requests; throw to reply with an error. Runs on a background thread.</summary>
+    public Func<string, JsonNode?, Task<JsonNode>>? RequestHandler { get; set; }
+
+    private async Task AnswerAsync (string method, JsonNode id, JsonNode? @params)
+    {
+        JsonObject reply = new () { ["jsonrpc"] = "2.0", ["id"] = id };
+
+        try
+        {
+            reply ["result"] = RequestHandler is { } handler
+                                   ? await handler (method, @params)
+                                   : throw new RvrbException ($"{method} is not supported");
+        }
+        catch (Exception ex)
+        {
+            reply ["error"] = new JsonObject { ["message"] = ex.Message };
+        }
+
+        try
+        {
+            await SendAsync (reply.ToJsonString ());
+        }
+        catch (Exception ex)
+        {
+            Session.LogDebug ($"Could not answer {method}: {ex.Message}");
         }
     }
 

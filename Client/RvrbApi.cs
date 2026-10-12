@@ -53,6 +53,53 @@ internal sealed class RvrbApi (Session session) : IDisposable
     public Task SetPreferredDeviceAsync (string deviceName) =>
         SendAsync (HttpMethod.Put, "api/music/devices/preferred", new JsonObject { ["device_name"] = deviceName });
 
+    /// <summary>`GET /api/music/search`: Spotify track search; returns Spotify track objects.</summary>
+    public async Task<JsonArray> SearchTracksAsync (string query, int limit = 30)
+    {
+        JsonNode result = await GetAsync ($"api/music/search?type=track&limit={limit}&q={Uri.EscapeDataString (query)}");
+
+        return result ["tracks"]? ["items"] as JsonArray ?? [];
+    }
+
+    /// <summary>`GET /api/music/stack`: the user's stacks (saved track lists); the DJ queue has `activeQueue: true`.</summary>
+    public async Task<JsonArray> GetStacksAsync ()
+    {
+        JsonNode result = await GetAsync ("api/music/stack");
+
+        return result ["result"] as JsonArray ?? [];
+    }
+
+    /// <summary>`POST /api/music/stack`: returns the new stack.</summary>
+    public async Task<JsonNode> CreateStackAsync (string name, bool activeQueue)
+    {
+        JsonNode result = await SendAsync (HttpMethod.Post, "api/music/stack",
+                                           new JsonObject { ["name"] = name, ["activeQueue"] = activeQueue, ["tracks"] = new JsonArray () });
+
+        return result ["result"] ?? throw new RvrbException ("The new stack was not returned");
+    }
+
+    /// <summary>`GET /api/music/stack/{id}`: a page of full track objects (`tracks`) and the stack's `totalItems`.</summary>
+    public async Task<JsonNode> GetStackAsync (string stackId, int page, int limit)
+    {
+        JsonNode result = await GetAsync ($"api/music/stack/{Uri.EscapeDataString (stackId)}?page={page}&limit={limit}");
+
+        return result ["result"] ?? throw new RvrbException ("The stack was not returned");
+    }
+
+    /// <summary>`POST /api/music/stack/{id}/tracks`: inserts the tracks at `position`.</summary>
+    public Task AddTracksAsync (string stackId, IEnumerable<string> trackIds, int position) =>
+        SendAsync (HttpMethod.Post, $"api/music/stack/{Uri.EscapeDataString (stackId)}/tracks",
+                   new JsonObject { ["trackIds"] = new JsonArray (trackIds.Select (id => (JsonNode)id).ToArray ()), ["position"] = position });
+
+    /// <summary>`PATCH /api/music/stack/{id}/tracks`: moves one track; `targetPosition` counts after its removal.</summary>
+    public Task MoveTrackAsync (string stackId, int position, int targetPosition) =>
+        SendAsync (HttpMethod.Patch, $"api/music/stack/{Uri.EscapeDataString (stackId)}/tracks",
+                   new JsonObject { ["position"] = position, ["targetPosition"] = targetPosition, ["length"] = 1 });
+
+    /// <summary>`DELETE /api/music/stack/{id}/tracks/{position}`.</summary>
+    public Task RemoveTrackAsync (string stackId, int position) =>
+        SendAsync (HttpMethod.Delete, $"api/music/stack/{Uri.EscapeDataString (stackId)}/tracks/{position}", null);
+
     private Task<JsonNode> GetAsync (string path) => SendAsync (HttpMethod.Get, path, null);
 
     private async Task<JsonNode> SendAsync (HttpMethod method, string path, JsonNode? body)
