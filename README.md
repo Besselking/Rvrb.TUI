@@ -1,7 +1,7 @@
 # RVRB TUI
 
 A terminal client for [RVRB](https://app.rvrb.one), built with [Terminal.Gui](https://github.com/tui-cs/Terminal.Gui) **v2**:
-chat, DJing from your RVRB queue, and the channel's music played on one of your Spotify devices. No voting (yet).
+chat, voting, DJing from your RVRB queue, and the channel's music played on one of your Spotify devices.
 
 ```bash
 dotnet run             # launch (Esc quits)
@@ -24,6 +24,9 @@ The token is saved to `~/.config/rvrb/token` (mode 600) and refreshed tokens fro
 - **F5 Queue**: your RVRB DJ queue. Enter plays a track next, Shift+↑/↓ moves it, Del removes it, `a` adds tracks.
 - **F6 Add tracks**: Spotify search; Enter in the box searches, Enter on a result adds it to the bottom of your queue.
 - **F7 Step up / Step down**: join or leave the decks. While you DJ, your turn plays the top of your queue.
+- **F8 ▲ Dope, F9 ▼ Nope, F12 ★ Star**: vote on the playing track; press again to take the vote back. Your votes
+  show in brackets in the now-playing bar, e.g. `[▲3] ▼0 ★1`. Starring also adds the track to your bookmark
+  playlist on Spotify (taking the star back doesn't remove it).
 - **Now playing** (top): track, DJ, votes (▲ dope ▼ nope ★ star) and progress.
 - **Chat** (middle): the last 100 messages, then live messages. A mention (`@` + your name) or a whisper rings the terminal bell.
 - **Message** (bottom): Enter sends. `/commands` are passed through to the server.

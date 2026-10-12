@@ -61,6 +61,27 @@ internal sealed class RvrbApi (Session session) : IDisposable
         return result ["tracks"]? ["items"] as JsonArray ?? [];
     }
 
+    /// <summary>
+    ///     The user's bookmark ("starred") Spotify playlist URI, from `GET /api/music/playlist/defaults`. When the
+    ///     user has no default playlists yet, `PUT` creates them (on Spotify) first.
+    /// </summary>
+    public async Task<string> GetStarredPlaylistAsync ()
+    {
+        JsonNode? defaults = (await GetAsync ("api/music/playlist/defaults")) ["result"];
+
+        if (defaults? ["spotifyStarredUri"].Str () is not { Length: > 0 })
+        {
+            defaults = (await SendAsync (HttpMethod.Put, "api/music/playlist/defaults", new JsonObject ())) ["result"];
+        }
+
+        return defaults? ["spotifyStarredUri"].Str () ?? throw new RvrbException ("You have no bookmark playlist");
+    }
+
+    /// <summary>`POST /api/music/playlist/{id}/tracks`: appends tracks (Spotify URIs) to a Spotify playlist.</summary>
+    public Task AddToPlaylistAsync (string playlistUri, IEnumerable<string> trackUris) =>
+        SendAsync (HttpMethod.Post, $"api/music/playlist/{Uri.EscapeDataString (playlistUri.Split (':') [^1])}/tracks",
+                   new JsonObject { ["uris"] = new JsonArray (trackUris.Select (u => (JsonNode)u).ToArray ()) });
+
     /// <summary>`GET /api/music/stack`: the user's stacks (saved track lists); the DJ queue has `activeQueue: true`.</summary>
     public async Task<JsonArray> GetStacksAsync ()
     {

@@ -80,7 +80,7 @@ internal sealed class ChatWindow : Window
         _mentions = [.. myNames.Select (n => n.Trim ()).Where (n => n.Length > 0).Distinct ().Select (n => "@" + n)];
         UpdateTitle ();
 
-        _nowPlaying = new () { X = 0, Y = 0, Width = Dim.Fill (UsersWidth), Height = 5 };
+        _nowPlaying = new () { X = 0, Y = 0, Width = Dim.Fill (UsersWidth), Height = 5, MyId = myId };
 
         // Leave 3 rows for the message box and 1 for the status bar.
         _chatFrame = new ()
@@ -160,10 +160,13 @@ internal sealed class ChatWindow : Window
         Shortcut device = new () { Title = "Device", Key = Key.F3, BindKeyToApplication = true, Action = ShowDevicePicker };
         _playbackShortcut = new () { Key = Key.F4, BindKeyToApplication = true, Action = TogglePlayback };
         Shortcut queue = new () { Title = "Queue", Key = Key.F5, BindKeyToApplication = true, Action = ShowQueue };
-        Shortcut search = new () { Title = "Add tracks", Key = Key.F6, BindKeyToApplication = true, Action = ShowSearch };
+        Shortcut search = new () { Title = "Add", Key = Key.F6, BindKeyToApplication = true, Action = ShowSearch };
         _djShortcut = new () { Title = "Step up", Key = Key.F7, BindKeyToApplication = true, Action = () => _ = ToggleDjAsync () };
+        Shortcut dope = new () { Title = "▲ Dope", Key = Key.F8, BindKeyToApplication = true, Action = () => _ = VoteAsync (Vote.Dope) };
+        Shortcut nope = new () { Title = "▼ Nope", Key = Key.F9, BindKeyToApplication = true, Action = () => _ = VoteAsync (Vote.Nope) };
+        Shortcut star = new () { Title = "★ Star", Key = Key.F12, BindKeyToApplication = true, Action = () => _ = VoteAsync (Vote.Star) };
         Shortcut quit = new () { Title = "Quit", Key = Key.Q.WithCtrl, BindKeyToApplication = true, Action = () => App?.RequestStop () };
-        statusBar.Add (channels, device, _playbackShortcut, queue, search, _djShortcut, quit);
+        statusBar.Add (channels, device, _playbackShortcut, queue, search, _djShortcut, dope, nope, star, quit);
         UpdatePlaybackShortcut ();
 
         Add (_nowPlaying, _chatFrame, inputFrame, _djsFrame, _listenersFrame, statusBar);
@@ -397,6 +400,72 @@ internal sealed class ChatWindow : Window
 
         return new JsonObject { ["track"] = track.DeepClone () };
     }
+
+    private enum Vote { Dope, Nope, Star }
+
+    /// <summary>
+    ///     Toggles a vote on the playing track. Only the toggled key is sent, so a vote made elsewhere (say a star
+    ///     from the web app) isn't overwritten. Dope and nope exclude each other: the server keeps only one, so
+    ///     voting one clears the other. Star (a bookmark) is separate.
+    /// </summary>
+    private async Task VoteAsync (Vote vote)
+    {
+        if (_channelId is null || !_nowPlaying.IsPlaying)
+        {
+            AddSystemLine ("Nothing is playing to vote on.");
+
+            return;
+        }
+
+        (bool dope, bool nope, bool star) = _nowPlaying.MyVote;
+
+        (bool Dope, bool Nope, bool Star) next = vote switch
+                                                 {
+                                                     Vote.Dope => (!dope, false, star),
+                                                     Vote.Nope => (false, !nope, star),
+                                                     _ => (dope, nope, !star)
+                                                 };
+
+        try
+        {
+            JsonObject p = vote switch
+                           {
+                               Vote.Dope => new () { ["dope"] = next.Dope },
+                               Vote.Nope => new () { ["nope"] = next.Nope },
+                               _ => new () { ["star"] = next.Star }
+                           };
+
+            await _socket.RequestAsync ("vote", p);
+            Ui (() => _nowPlaying.SetMyVote (next));
+
+            // The server records the star but doesn't touch the playlist: add it to the bookmarks ourselves.
+            if (vote == Vote.Star && next.Star && _nowPlaying.TrackUri is { } uri)
+            {
+                await BookmarkAsync (uri, _nowPlaying.TrackTitle);
+            }
+        }
+        catch (Exception ex)
+        {
+            Ui (() => AddSystemLine ($"Vote not counted: {ex.Message}"));
+        }
+    }
+
+    /// <summary>Adds a starred track to the user's bookmark playlist (cached after the first lookup).</summary>
+    private async Task BookmarkAsync (string trackUri, string title)
+    {
+        try
+        {
+            _starredPlaylist ??= await _api.GetStarredPlaylistAsync ();
+            await _api.AddToPlaylistAsync (_starredPlaylist, [trackUri]);
+            Ui (() => AddSystemLine ($"Bookmarked {title}."));
+        }
+        catch (Exception ex)
+        {
+            Ui (() => AddSystemLine ($"Starred, but not added to your bookmark playlist: {ex.Message}"));
+        }
+    }
+
+    private string? _starredPlaylist;
 
     private void UpdatePlaybackShortcut () => _playbackShortcut.Title = _player.Enabled ? "Playback: on" : "Playback: off";
 
@@ -642,7 +711,8 @@ internal sealed class ChatWindow : Window
                 break;
 
             case "updateChannelMeter":
-                _nowPlaying.SetVotes (p? ["voting"]);
+                // The spec nests the votes in `voting`; take params itself if they aren't.
+                _nowPlaying.SetVotes (p? ["voting"] ?? p);
 
                 break;
 
