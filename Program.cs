@@ -18,6 +18,7 @@ string? token = args.Contains ("--login") ? null : Environment.GetEnvironmentVar
 Session? session = null;
 string me = "";
 string myId = "";
+string [] myNames = [];
 
 while (session is null)
 {
@@ -37,6 +38,7 @@ while (session is null)
         JsonNode? user = login ["user"];
         me = user? ["displayName"].Str () is { Length: > 0 } d ? d : user? ["userName"].Str () ?? "?";
         myId = user? ["_id"].Str () ?? "";
+        myNames = [.. new [] { user? ["displayName"].Str (), user? ["userName"].Str () }.OfType<string> ()];
         session = candidate;
     }
     catch (RvrbAuthException)
@@ -60,7 +62,7 @@ ConfigurationManager.Enable (ConfigLocations.All);
 
 using (IApplication app = Application.Create ().Init ())
 {
-    using ChatWindow window = new (api, socket, me, myId);
+    using ChatWindow window = new (api, socket, me, myId, myNames);
 
     // Closing the terminal window (SIGHUP) or `kill` (SIGTERM) would end the process without leaving the channel;
     // stop the app instead, so the normal exit path below runs.

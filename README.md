@@ -25,7 +25,7 @@ The token is saved to `~/.config/rvrb/token` (mode 600) and refreshed tokens fro
 - **F6 Add tracks**: Spotify search; Enter in the box searches, Enter on a result adds it to the bottom of your queue.
 - **F7 Step up / Step down**: join or leave the decks. While you DJ, your turn plays the top of your queue.
 - **Now playing** (top): track, DJ, votes (▲ dope ▼ nope ★ star) and progress.
-- **Chat** (middle): the last 100 messages, then live messages.
+- **Chat** (middle): the last 100 messages, then live messages. A mention (`@` + your name) or a whisper rings the terminal bell.
 - **Message** (bottom): Enter sends. `/commands` are passed through to the server.
 - **DJs** (top right): the DJ queue in play order, the playing DJ first (▶).
 - **Listeners** (bottom right): everyone else in the channel.

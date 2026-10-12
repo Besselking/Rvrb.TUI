@@ -25,6 +25,9 @@ internal sealed class ChatWindow : Window
     private readonly string _me;
     private readonly string _myId;
 
+    // "@name" mentions to ring the terminal bell for: the display name and the username, trimmed.
+    private readonly string [] _mentions;
+
     private readonly NowPlayingView _nowPlaying;
     private readonly Shortcut _playbackShortcut;
     private readonly Shortcut _djShortcut;
@@ -66,7 +69,7 @@ internal sealed class ChatWindow : Window
     private string? _answeredTrackId;
     private string _status = "starting…";
 
-    public ChatWindow (RvrbApi api, RvrbSocket socket, string me, string myId)
+    public ChatWindow (RvrbApi api, RvrbSocket socket, string me, string myId, IEnumerable<string> myNames)
     {
         _api = api;
         _socket = socket;
@@ -74,6 +77,7 @@ internal sealed class ChatWindow : Window
         _queue = new (api);
         _me = me;
         _myId = myId;
+        _mentions = [.. myNames.Select (n => n.Trim ()).Where (n => n.Length > 0).Distinct ().Select (n => "@" + n)];
         UpdateTitle ();
 
         _nowPlaying = new () { X = 0, Y = 0, Width = Dim.Fill (UsersWidth), Height = 5 };
@@ -797,11 +801,22 @@ internal sealed class ChatWindow : Window
         // Indent continuation lines under the message.
         _lines.Add ((syncTime, key, line.Replace ("\n", "\n      "), type == "alert"));
 
+        // render is false for the backlog loaded on join: only live messages ring.
         if (render)
         {
             Render ();
+
+            if (userId != _myId && (type == "whisper" || IsMention (body)))
+            {
+                Bell ();
+            }
         }
     }
+
+    private bool IsMention (string text) => _mentions.Any (m => text.Contains (m, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The terminal bell (BEL); most terminals beep, flash, or mark the tab, depending on their settings.</summary>
+    private void Bell () => App?.Driver?.WriteRaw ("\a");
 
     private void AddSystemLine (string text)
     {
