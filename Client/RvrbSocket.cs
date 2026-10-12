@@ -94,8 +94,10 @@ internal sealed class RvrbSocket (Session session) : IAsyncDisposable
                     + $"&clientId={Uri.EscapeDataString (session.ClientId)}");
 
                 await ws.ConnectAsync (uri, ct);
+                Session.LogDebug ("-- connected");
                 delay = TimeSpan.FromSeconds (1);
                 await ReceiveLoopAsync (ws, ct);
+                Session.LogDebug ($"-- closed by server: {ws.CloseStatus} {ws.CloseStatusDescription} (state {ws.State})");
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -103,6 +105,7 @@ internal sealed class RvrbSocket (Session session) : IAsyncDisposable
             }
             catch (Exception ex)
             {
+                Session.LogDebug ($"-- connection error: {ex}");
                 StatusChanged?.Invoke ($"connection error: {ex.Message}");
             }
             finally
@@ -263,6 +266,7 @@ internal sealed class RvrbSocket (Session session) : IAsyncDisposable
 
         try
         {
+            Session.LogDebug ($">> {text}");
             await ws.SendAsync (Encoding.UTF8.GetBytes (text), WebSocketMessageType.Text, true, _cts.Token);
         }
         finally
