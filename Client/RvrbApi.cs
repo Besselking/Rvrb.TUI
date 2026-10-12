@@ -7,7 +7,7 @@ internal class RvrbException (string message) : Exception (message);
 
 internal sealed class RvrbAuthException (string message) : RvrbException (message);
 
-/// <summary>The handful of REST routes the chat client needs (see https://app.rvrb.one/api-docs/openapi.yaml).</summary>
+/// <summary>The REST routes the client needs (see https://app.rvrb.one/api-docs/openapi.yaml).</summary>
 internal sealed class RvrbApi (Session session) : IDisposable
 {
     public static readonly Uri BaseUri = new ("https://app.rvrb.one/");
@@ -38,10 +38,32 @@ internal sealed class RvrbApi (Session session) : IDisposable
         return result ["chat"] as JsonArray ?? [];
     }
 
-    private async Task<JsonNode> GetAsync (string path)
+    /// <summary>
+    ///     `GET /api/music/devices`: the user's Spotify Connect devices, as Spotify returns them (`id`, `name`, `type`,
+    ///     `is_active`, ...), with `is_preferred` on the saved preferred one.
+    /// </summary>
+    public async Task<JsonArray> GetDevicesAsync ()
     {
-        using HttpRequestMessage request = new (HttpMethod.Get, path);
+        JsonNode result = await GetAsync ("api/music/devices");
+
+        return result ["devices"] as JsonArray ?? [];
+    }
+
+    /// <summary>`PUT /api/music/devices/preferred`: saves the preferred device by name (so it survives id changes).</summary>
+    public Task SetPreferredDeviceAsync (string deviceName) =>
+        SendAsync (HttpMethod.Put, "api/music/devices/preferred", new JsonObject { ["device_name"] = deviceName });
+
+    private Task<JsonNode> GetAsync (string path) => SendAsync (HttpMethod.Get, path, null);
+
+    private async Task<JsonNode> SendAsync (HttpMethod method, string path, JsonNode? body)
+    {
+        using HttpRequestMessage request = new (method, path);
         request.Headers.TryAddWithoutValidation ("authorization", $"Bearer {session.Token}");
+
+        if (body is { })
+        {
+            request.Content = new StringContent (body.ToJsonString (), System.Text.Encoding.UTF8, "application/json");
+        }
 
         using HttpResponseMessage response = await _http.SendAsync (request);
 
@@ -51,19 +73,30 @@ internal sealed class RvrbApi (Session session) : IDisposable
             session.Update (updated);
         }
 
-        string body = await response.Content.ReadAsStringAsync ();
+        string text = await response.Content.ReadAsStringAsync ();
 
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
         {
-            throw new RvrbAuthException (string.IsNullOrWhiteSpace (body) ? response.ReasonPhrase ?? "Unauthorized" : body);
+            throw new RvrbAuthException (string.IsNullOrWhiteSpace (text) ? response.ReasonPhrase ?? "Unauthorized" : text);
         }
 
         if (!response.IsSuccessStatusCode)
         {
-            throw new RvrbException ($"{(int)response.StatusCode}: {body}");
+            // Errors are `{ error }` (see the Error schema) or a plain string.
+            string message = text;
+
+            try
+            {
+                message = JsonNode.Parse (text)? ["error"].Str () ?? text;
+            }
+            catch (System.Text.Json.JsonException)
+            {
+            }
+
+            throw new RvrbException ($"{(int)response.StatusCode}: {message}");
         }
 
-        return JsonNode.Parse (body) ?? throw new RvrbException ($"Empty response from {path}");
+        return JsonNode.Parse (text) ?? throw new RvrbException ($"Empty response from {path}");
     }
 
     public void Dispose () => _http.Dispose ();

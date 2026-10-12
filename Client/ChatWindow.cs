@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Text.Json.Nodes;
 using Terminal.Gui.Drawing;
+using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 using Attribute = Terminal.Gui.Drawing.Attribute;
@@ -8,8 +9,9 @@ using Attribute = Terminal.Gui.Drawing.Attribute;
 namespace Rvrb;
 
 /// <summary>
-///     Channels on the left, the chat of the joined channel in the middle, its users on the right, and the message
-///     box at the bottom. Socket events arrive on a background thread and are marshalled with App.Invoke.
+///     The now-playing bar and the chat of the joined channel, with the DJ queue and listeners on the right and the
+///     message box below. Channels and the Spotify device are picked in dialogs from the status bar (F2, F3).
+///     Socket events arrive on a background thread and are marshalled with App.Invoke.
 /// </summary>
 internal sealed class ChatWindow : Window
 {
@@ -18,13 +20,11 @@ internal sealed class ChatWindow : Window
 
     private readonly RvrbApi _api;
     private readonly RvrbSocket _socket;
+    private readonly Player _player;
     private readonly string _me;
 
-    private readonly TextField _search;
-    private readonly ListView _channelList;
-    private readonly ObservableCollection<string> _channelItems = [];
-    private readonly List<JsonNode> _channels = [];
-
+    private readonly NowPlayingView _nowPlaying;
+    private readonly Shortcut _playbackShortcut;
     private readonly FrameView _chatFrame;
 
     // TextView is marked obsolete in favour of tui-cs/Editor, but it is still the built-in view with word wrap.
@@ -57,36 +57,27 @@ internal sealed class ChatWindow : Window
 
     private string? _channelId;
     private string? _channelTitle;
+    private JsonNode? _pendingJoin;
     private string _status = "starting…";
 
     public ChatWindow (RvrbApi api, RvrbSocket socket, string me)
     {
         _api = api;
         _socket = socket;
+        _player = new (socket);
         _me = me;
         UpdateTitle ();
 
-        FrameView channelsFrame = new ()
-        {
-            Title = "Channels (Enter: search / join)",
-            X = 0,
-            Y = 0,
-            Width = 34,
-            Height = Dim.Fill ()
-        };
+        _nowPlaying = new () { X = 0, Y = 0, Width = Dim.Fill (UsersWidth), Height = 4 };
 
-        _search = new () { X = 0, Y = 0, Width = Dim.Fill () };
-        _channelList = new () { X = 0, Y = 1, Width = Dim.Fill (), Height = Dim.Fill () };
-        _channelList.SetSource (_channelItems);
-        channelsFrame.Add (_search, _channelList);
-
+        // Leave 3 rows for the message box and 1 for the status bar.
         _chatFrame = new ()
         {
             Title = "Chat",
-            X = Pos.Right (channelsFrame),
-            Y = 0,
+            X = 0,
+            Y = Pos.Bottom (_nowPlaying),
             Width = Dim.Fill (UsersWidth),
-            Height = Dim.Fill (3)
+            Height = Dim.Fill (4)
         };
 
         _log = new () { Width = Dim.Fill (), Height = Dim.Fill (), ReadOnly = true, WordWrap = true };
@@ -115,7 +106,7 @@ internal sealed class ChatWindow : Window
         FrameView inputFrame = new ()
         {
             Title = "Message",
-            X = Pos.Right (channelsFrame),
+            X = 0,
             Y = Pos.Bottom (_chatFrame),
             Width = Dim.Fill (UsersWidth),
             Height = 3
@@ -144,30 +135,25 @@ internal sealed class ChatWindow : Window
             X = Pos.AnchorEnd (UsersWidth),
             Y = Pos.Bottom (_djsFrame),
             Width = UsersWidth,
-            Height = Dim.Fill ()
+            Height = Dim.Fill (1)
         };
 
         ListView listenerList = new () { Width = Dim.Fill (), Height = Dim.Fill () };
         listenerList.SetSource (_listenerItems);
         _listenersFrame.Add (listenerList);
 
-        Add (channelsFrame, _chatFrame, inputFrame, _djsFrame, _listenersFrame);
+        // StatusBar positions itself at the bottom. Its keys work app-wide.
+        StatusBar statusBar = new ();
+        Shortcut channels = new () { Title = "Channels", Key = Key.F2, BindKeyToApplication = true, Action = ShowChannelPicker };
+        Shortcut device = new () { Title = "Device", Key = Key.F3, BindKeyToApplication = true, Action = ShowDevicePicker };
+        _playbackShortcut = new () { Key = Key.F4, BindKeyToApplication = true, Action = TogglePlayback };
+        Shortcut quit = new () { Title = "Quit", Key = Key.Q.WithCtrl, BindKeyToApplication = true, Action = () => App?.RequestStop () };
+        statusBar.Add (channels, device, _playbackShortcut, quit);
+        UpdatePlaybackShortcut ();
+
+        Add (_nowPlaying, _chatFrame, inputFrame, _djsFrame, _listenersFrame, statusBar);
 
         // Enter in a TextField raises Accepting; handle it so it doesn't bubble up to the window.
-        _search.Accepting += (_, e) =>
-                             {
-                                 e.Handled = true;
-                                 _ = LoadChannelsAsync (_search.Text);
-                             };
-
-        _channelList.Accepted += (_, _) =>
-                                 {
-                                     if (_channelList.Value is { } i && i < _channels.Count)
-                                     {
-                                         _ = JoinAsync (_channels [i]);
-                                     }
-                                 };
-
         _input.Accepting += (_, e) =>
                             {
                                 e.Handled = true;
@@ -179,8 +165,20 @@ internal sealed class ChatWindow : Window
                                               _status = s;
                                               UpdateTitle ();
                                           });
-        _socket.Ready += () => Ui (() => _ = RejoinAsync ());
+        _socket.Ready += () => Ui (() =>
+                                   {
+                                       if (_pendingJoin is { } pending)
+                                       {
+                                           _pendingJoin = null;
+                                           _ = JoinAsync (pending);
+                                       }
+                                       else
+                                       {
+                                           _ = RejoinAsync ();
+                                       }
+                                   });
         _socket.Notification += (method, p) => Ui (() => OnNotification (method, p));
+        _player.Error += message => Ui (() => AddSystemLine ($"Playback: {message} (F3 picks a Spotify device, F4 turns playback off)"));
 
         Initialized += (_, _) =>
                        {
@@ -205,21 +203,95 @@ internal sealed class ChatWindow : Window
                                DimBorder (view);
                            }
 
-                           AddSystemLine ("Pick a channel on the left and press Enter. Esc quits.");
+                           AddSystemLine ("F2 picks a channel, F3 the Spotify device to play on, F4 turns playback on or off.");
                            _socket.Start ();
-                           _ = LoadChannelsAsync (null);
+
+                           // Advance the progress bar.
+                           App!.AddTimeout (TimeSpan.FromSeconds (1),
+                                            () =>
+                                            {
+                                                _nowPlaying.Tick ();
+
+                                                return true;
+                                            });
                        };
+
+        // Start by picking a channel. Not from a timer: a modal run from inside a timer callback never processes
+        // App.Invoke, so the dialog's list would never fill.
+        IsRunningChanged += (_, e) =>
+                            {
+                                if (e.Value && _channelId is null)
+                                {
+                                    ShowChannelPicker ();
+                                }
+                            };
     }
 
     private void Ui (Action action) => App?.Invoke (action);
 
-    /// <summary>Leaves the joined channel; called on exit. Waits briefly for the server, and never throws.</summary>
+    private void ShowChannelPicker ()
+    {
+        using ChannelPicker picker = new (_api);
+        App!.Run (picker);
+
+        if (picker.Selected is { } channel)
+        {
+            _ = JoinAsync (channel);
+        }
+    }
+
+    private void ShowDevicePicker ()
+    {
+        using DevicePicker picker = new (_api, _player.DeviceId);
+        App!.Run (picker);
+
+        if (picker.Selected is not { } device || device ["id"].Str () is not { } id)
+        {
+            return;
+        }
+
+        string? name = device ["name"].Str ();
+        AddSystemLine ($"Playing on {name ?? id}.");
+        _ = _player.UseDeviceAsync (id, name);
+
+        // Also make it the preferred device, which the server falls back to (and the web app shows).
+        if (name is { })
+        {
+            _ = SavePreferredAsync (name);
+        }
+    }
+
+    private async Task SavePreferredAsync (string name)
+    {
+        try
+        {
+            await _api.SetPreferredDeviceAsync (name);
+        }
+        catch (Exception ex)
+        {
+            Ui (() => AddSystemLine ($"Could not save the preferred device: {ex.Message}"));
+        }
+    }
+
+    private void TogglePlayback ()
+    {
+        bool enabled = !_player.Enabled;
+        _ = _player.SetEnabledAsync (enabled);
+        UpdatePlaybackShortcut ();
+        AddSystemLine (enabled ? "Playback on." : "Playback off: tracks are no longer played on your Spotify device.");
+    }
+
+    private void UpdatePlaybackShortcut () => _playbackShortcut.Title = _player.Enabled ? "Playback: on" : "Playback: off";
+
+    /// <summary>Stops playback and leaves the joined channel; called on exit. Waits briefly, and never throws.</summary>
     public async Task LeaveChannelAsync ()
     {
         if (_channelId is null)
         {
             return;
         }
+
+        await _player.StopAsync ();
 
         try
         {
@@ -251,51 +323,21 @@ internal sealed class ChatWindow : Window
 
     private void UpdateTitle () => Title = $"RVRB — {_me} — {_status}";
 
-    private async Task LoadChannelsAsync (string? search)
-    {
-        try
-        {
-            JsonNode result = await _api.ListChannelsAsync (search);
-            JsonArray channels = result ["channels"] as JsonArray ?? [];
-
-            Ui (() =>
-                {
-                    _channels.Clear ();
-                    _channelItems.Clear ();
-
-                    foreach (JsonNode? channel in channels)
-                    {
-                        if (channel is null)
-                        {
-                            continue;
-                        }
-
-                        int users = (channel ["users"] as JsonArray)?.Count ?? 0;
-                        _channels.Add (channel);
-                        _channelItems.Add ($"{ChannelTitle (channel)}  ({users})");
-                    }
-
-                    if (_channels.Count == 0)
-                    {
-                        AddSystemLine (string.IsNullOrWhiteSpace (search) ? "No active channels right now; search for one." : $"No channels match \"{search}\".");
-                    }
-                });
-        }
-        catch (Exception ex)
-        {
-            Ui (() => AddSystemLine ($"Could not load channels: {ex.Message}"));
-        }
-    }
-
-    private static string ChannelTitle (JsonNode channel) =>
-        channel ["title"].Str () is { Length: > 0 } t ? t : channel ["slug"].Str () ?? "?";
-
     private async Task JoinAsync (JsonNode channel)
     {
         string? id = channel ["_id"].Str ();
 
         if (id is null || id == _channelId)
         {
+            return;
+        }
+
+        // Picked before the websocket is ready (e.g. right at startup): join once it is.
+        if (!_socket.IsReady)
+        {
+            _pendingJoin = channel;
+            AddSystemLine ($"Connecting… joining {ChannelPicker.ChannelTitle (channel)} once connected.");
+
             return;
         }
 
@@ -306,10 +348,14 @@ internal sealed class ChatWindow : Window
         _djs = (channel ["djs"] as JsonArray)?.Select (d => d.Str ()).OfType<string> ().ToList () ?? [];
         RefreshPeople ();
 
+        _nowPlaying.Clear ();
+
         try
         {
             if (_channelId is { })
             {
+                // The new channel's track (if any) arrives after joining; don't keep playing the old one meanwhile.
+                await _player.StopAsync ();
                 await _socket.RequestAsync ("leave");
             }
 
@@ -328,7 +374,7 @@ internal sealed class ChatWindow : Window
         Ui (() =>
             {
                 _channelId = id;
-                _channelTitle = ChannelTitle (channel);
+                _channelTitle = ChannelPicker.ChannelTitle (channel);
                 _chatFrame.Title = _channelTitle;
                 _lines.Clear ();
                 _seen.Clear ();
@@ -453,6 +499,28 @@ internal sealed class ChatWindow : Window
 
                 break;
 
+            case "playChannelTrack":
+                _nowPlaying.SetTrack (p);
+                _ = _player.OnChannelTrackAsync (p? ["track"]? ["uri"].Str (), serverPlays: p? ["playTrack"].Bool () == false);
+
+                break;
+
+            case "pauseChannelTrack":
+                _nowPlaying.Clear ();
+                _ = _player.StopAsync ();
+
+                break;
+
+            case "updateChannelMeter":
+                _nowPlaying.SetVotes (p? ["voting"]);
+
+                break;
+
+            case "activePlayer":
+                _player.OnActivePlayer (p? ["device_id"].Str ());
+
+                break;
+
             case "clearChannelMessages":
                 if (p? ["syncTime"] is JsonArray times)
                 {
@@ -480,6 +548,8 @@ internal sealed class ChatWindow : Window
                     _users = [];
                     _djs = [];
                     RefreshPeople ();
+                    _nowPlaying.Clear ();
+                    _ = _player.StopAsync ();
                 }
 
                 break;
@@ -544,6 +614,8 @@ internal sealed class ChatWindow : Window
                            };
             _listenerItems.Add (badge + name);
         }
+
+        _nowPlaying.SetDj (_djs.Count > 0 && _names.TryGetValue (_djs [0], out string? dj) ? dj : null);
 
         _djsFrame.Title = $"DJs ({_djs.Count})";
         _listenersFrame.Title = $"Listeners ({_listenerItems.Count})";

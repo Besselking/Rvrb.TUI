@@ -26,6 +26,9 @@ internal sealed class RvrbSocket (Session session) : IAsyncDisposable
     /// <summary>The server sent `ready`: (re)join the channel now.</summary>
     public event Action? Ready;
 
+    /// <summary>Connected and past `ready`: requests can be sent.</summary>
+    public bool IsReady { get; private set; }
+
     public event Action<string>? StatusChanged;
 
     public void Start () => _loop = Task.Run (() => RunAsync (_cts.Token));
@@ -105,6 +108,7 @@ internal sealed class RvrbSocket (Session session) : IAsyncDisposable
             finally
             {
                 _ws = null;
+                IsReady = false;
 
                 foreach (TaskCompletionSource<JsonNode?> tcs in _pending.Values)
                 {
@@ -217,6 +221,7 @@ internal sealed class RvrbSocket (Session session) : IAsyncDisposable
                 break;
 
             case "ready":
+                IsReady = true;
                 StatusChanged?.Invoke ("connected");
                 Ready?.Invoke ();
 

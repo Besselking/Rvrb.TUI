@@ -1,7 +1,7 @@
 # RVRB TUI
 
-A terminal chat client for [RVRB](https://app.rvrb.one), built with [Terminal.Gui](https://github.com/tui-cs/Terminal.Gui) **v2**.
-Chat only: no playback, voting or DJing (yet).
+A terminal client for [RVRB](https://app.rvrb.one), built with [Terminal.Gui](https://github.com/tui-cs/Terminal.Gui) **v2**:
+chat, and the channel's music played on one of your Spotify devices. No voting or DJing (yet).
 
 ```bash
 dotnet run             # launch (Esc quits)
@@ -18,23 +18,34 @@ The token is saved to `~/.config/rvrb/token` (mode 600) and refreshed tokens fro
 `RVRB_TOKEN` in the environment takes precedence over the saved one.
 
 ## Using it
-- **Channels** (left): popular channels are listed; type in the box and press Enter to search. Enter on a channel joins it.
+- **F2 Channels**: opens at startup. Popular channels are listed; type and press Enter to search, Enter again joins.
+- **F3 Device**: the Spotify device to play on (also saved as your preferred device on RVRB).
+- **F4 Playback**: turns playing the channel's tracks on your device on or off (on by default).
+- **Now playing** (top): track, DJ, votes (▲ dope ▼ nope ★ star) and progress.
 - **Chat** (middle): the last 100 messages, then live messages.
 - **Message** (bottom): Enter sends. `/commands` are passed through to the server.
 - **DJs** (top right): the DJ queue in play order, the playing DJ first (▶).
 - **Listeners** (bottom right): everyone else in the channel.
 
-Quitting (Esc, closing the terminal, or `kill`) leaves the channel first.
+Quitting (Esc or Ctrl+Q, closing the terminal, or `kill`) pauses playback and leaves the channel first.
+
+### Playback
+RVRB streams nothing itself: it tells Spotify to play the channel's track on one of your Spotify Connect devices
+(the Spotify app on a computer or phone, a speaker, or `spotifyd`), using the Spotify login RVRB already has.
+Spotify only lists devices that are running, and controlling playback needs Spotify Premium.
 
 ## Project layout
 | File | Purpose |
 |---|---|
 | `Program.cs` | Console login, then runs the TUI. |
 | `Client/Session.cs` | Session token + client id, persisted in `~/.config/rvrb`. |
-| `Client/RvrbApi.cs` | REST routes used (`/api/login`, `/api/channels`, `/api/channel/{id}/chat`). |
+| `Client/RvrbApi.cs` | REST routes used (login, channels, chat history, Spotify devices). |
 | `Client/RvrbSocket.cs` | JSON-RPC 2.0 websocket (`wss://app.rvrb.one/ws`): requests, keepalive, reconnect. |
 | `Client/ChatText.cs` | Turns the HTML chat payloads into plain text. |
-| `Client/ChatWindow.cs` | The UI. |
+| `Client/Player.cs` | Plays channel tracks on a Spotify device (`playTrack` / `pauseTrack`). |
+| `Client/ChatWindow.cs` | The main window. |
+| `Client/NowPlayingView.cs` | Track, DJ, votes and progress bar. |
+| `Client/Pickers.cs` | Channel and Spotify device dialogs. |
 | `AGENTS.md` | **Canonical Terminal.Gui v2 patterns + gotchas.** Read before editing UI code. |
 
 API docs: [openapi.yaml](https://app.rvrb.one/api-docs/openapi.yaml) (REST), [asyncapi.yaml](https://app.rvrb.one/api-docs/asyncapi.yaml) (websocket).
