@@ -1,8 +1,8 @@
 # RVRB API: notes from building a client
 
-Notes from building [Rvrb.TUI](https://github.com/Besselking/Rvrb.TUI), a terminal client for
-<https://app.rvrb.one>, written down for starting a mobile app. The official specs are good and mostly right;
-this file is about how the server actually behaved, where it differs from the specs, and the pitfalls hit on the way.
+Notes from building a client for <https://app.rvrb.one>, as a starting point for other clients. The official specs
+are good and mostly right; this file is about how the server actually behaved, where it differs from the specs, and
+the pitfalls hit on the way.
 
 - REST: <https://app.rvrb.one/api-docs/openapi.yaml>
 - Websocket: <https://app.rvrb.one/api-docs/asyncapi.yaml>
@@ -26,16 +26,16 @@ playback all go through RVRB.
 - Login is Spotify OAuth only. `GET /api/login/spotify` (**observed**, missing from the spec) redirects to
   Spotify's authorize page. The `redirect_uri` is fixed to `https://app.rvrb.one/api/login/spotify/callback`, and the
   callback redirects to `https://app.rvrb.one/login/?session=<JWT>&spotifyToken=...`.
-- So a native client can't receive the redirect itself. The TUI makes the user paste that URL (or the token).
-  For mobile, an in-app web view that watches for navigation to `app.rvrb.one/login/?session=` and takes the `session`
-  parameter should work. A cleaner option is asking the RVRB maintainers for a redirect to a custom URL scheme.
+- So a native client can't receive the redirect itself. Options: let the user paste that URL (or the token); an
+  in-app web view that watches for navigation to `app.rvrb.one/login/?session=` and takes the `session` parameter;
+  or, cleaner, ask the RVRB maintainers for a redirect to a custom URL scheme.
 - REST: the JWT goes in the `authorization` header, with or without `Bearer `. `GET /api/login` validates it and
   returns `{ token, user, chatMaxLength }`. `user._id`, `user.displayName` and `user.userName` are what a client needs.
   A bad token gives 401 with the plain-text body `Forbidden`.
 - Websocket: the JWT goes in the `token` query parameter, without `Bearer `.
 - Token refresh (**spec**, never seen): REST responses can carry an `update-token` header, and websocket results or
-  errors an `updateToken`. The spec doesn't give `updateToken`'s shape; the TUI accepts a string or an object with
-  `token`/`session`/`jwt`. Store the new token whenever one arrives.
+  errors an `updateToken`. The spec doesn't give `updateToken`'s shape, so accept a string or an object holding the
+  token. Store the new token whenever one arrives.
 - One pasted JWT lasted a full day of use; its real lifetime is unknown. There's no refresh endpoint: when it's
   rejected, log in again.
 
@@ -48,7 +48,7 @@ playback all go through RVRB.
   `{"jsonrpc":"2.0","method":"stayAwake"}`.
 - **`clientId` matters (observed).** Two connections with the same `clientId` bump each other off: no `closed`
   message, the socket just drops, both reconnect, and it loops every second or two. This happened when a stray second
-  copy of the TUI was running with the same saved id. Make the id unique per running app instance. It only exists so
+  copy of a client was running with the same saved id. Make the id unique per running app instance. It only exists so
   a reconnect resumes the same connection.
 - A closed connection gets 10 seconds to come back before the user leaves their channel (**spec**). Even so, quitting
   without sending `leave` left the account in the channel (**observed**), so send `leave` on exit.
@@ -79,14 +79,14 @@ playback all go through RVRB.
 
 ### Chat
 
-- `pushChannelMessage.payload` is sanitised HTML; tables come as objects, images as `data:image...`. The TUI
-  strips tags and decodes entities.
+- `pushChannelMessage.payload` is HTML, sanitised by the server (links, images, formatting); tables come as objects
+  (`{ type: repeatingTable | standard, ... }`), images can be `data:image...` URIs.
 - `type` is `chat`, `whisper`, `alert` (system announcements, e.g. "… is being played for the first time!"), `play`
   ("Artist::Title"), `expandable`, `hay` or `botResponse`. `userId` is `server` or `bot` for system and bot messages.
 - **`userId` is sometimes a number, not a string (observed).** The specs' types aren't reliable, so read JSON
-  leniently; strict typed deserialisation crashed the TUI on the first channel it joined.
-- Mentions are plain text: `@` + the display name, e.g. `Welcome @Bess 🐸`. The TUI matches the display name and
-  the username to ring the bell.
+  leniently; strict typed deserialisation failed on the first channel joined.
+- Mentions aren't marked up: the payload just contains `@` + the display name, e.g. `Welcome @Bess 🐸`. To
+  detect them, match `@` + the display name and the username.
 - `clearChannelMessages` removes messages by `syncTime` (or everything without it).
 
 ### Users and DJs
@@ -102,8 +102,9 @@ playback all go through RVRB.
   `voting`, `playTrack`. The clocks can differ, so place `endsAt` on the local clock with `syncTime - localNow` as
   the offset.
 - To play it, send `playTrack { uri, device_id? }`. **Playback started fine this way (observed)**; the server
-  is meant to start at the channel's position (it "measures the latency"), but the exact sync wasn't checked. Without `device_id` the server picks the active device, then the preferred one, any device, or
-  the web player. `activePlayer { device_id }` reports where it went.
+  is meant to start at the channel's position (it "measures the latency"), but the exact sync wasn't
+  checked. Without `device_id` the server picks the active device, then the preferred one, any device, or the web
+  player. `activePlayer { device_id }` reports where it went.
 - `pauseChannelTrack`: nothing is playing; send `pauseTrack` if you started playback.
 - Playback control needs Spotify Premium, and Spotify only lists devices that are running.
 
@@ -134,8 +135,8 @@ playback all go through RVRB.
   `album.name`, `album.images`, `artists`, `uri`, `id` and `name` are used). An error answer takes the DJ off the decks,
   which is the right answer for an empty queue. Keep the queue's top track cached to answer in time.
 - **The server doesn't take the track off the queue (observed)**, although the spec suggests `refreshDjStack`
-  means it did. The same track played again on the next turn. The TUI removes it itself once `playChannelTrack`
-  arrives with the track it answered. It first checks the top is still that track, in case something else removed it.
+  means it did. The same track played again on the next turn. Remove it yourself once `playChannelTrack`
+  arrives with the track you answered. It first checks the top is still that track, in case something else removed it.
   `refreshDjStack` was never seen.
 
 ## REST
@@ -199,7 +200,3 @@ and AFK (`userStatus`), `updateChannelUserStatus`, notifications over REST, pass
 - Playback and votes act on the real Spotify account and RVRB profile.
 - Log every websocket frame in and out, plus connects and closes, behind a debug flag. Most of the findings above
   came from reading such a log.
-- In the TUI: [`RvrbSocket.cs`](../Client/RvrbSocket.cs) (JSON-RPC, keepalive, reconnect, server requests),
-  [`RvrbApi.cs`](../Client/RvrbApi.cs) (REST), [`TrackQueue.cs`](../Client/TrackQueue.cs) (queue and DJ answers),
-  [`NowPlayingView.cs`](../Client/NowPlayingView.cs) (track timing, votes), [`Json.cs`](../Client/Json.cs) (lenient
-  reads).
