@@ -56,4 +56,6 @@ Spotify only lists devices that are running, and controlling playback needs Spot
 | `Client/QueueDialogs.cs` | Queue and Spotify search dialogs. |
 | `AGENTS.md` | **Canonical Terminal.Gui v2 patterns + gotchas.** Read before editing UI code. |
 
+Notes on how the API behaves in practice (and where it differs from the specs): [docs/rvrb-api-notes.md](docs/rvrb-api-notes.md).
+
 API docs: [openapi.yaml](https://app.rvrb.one/api-docs/openapi.yaml) (REST), [asyncapi.yaml](https://app.rvrb.one/api-docs/asyncapi.yaml) (websocket).
