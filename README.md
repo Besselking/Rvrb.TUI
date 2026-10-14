@@ -2,6 +2,11 @@
 
 A terminal client for [RVRB](https://app.rvrb.one), built with [Terminal.Gui](https://github.com/tui-cs/Terminal.Gui) **v2**:
 chat, voting, DJing from your RVRB queue, and the channel's music played on one of your Spotify devices.
+There's also a SwiftUI client for iOS and macOS: [Rvrb.Apple](https://github.com/Besselking/Rvrb.Apple).
+
+This is an unofficial client, not affiliated with RVRB or Spotify.
+
+Needs the [.NET 10 SDK](https://dotnet.microsoft.com/download).
 
 ```bash
 dotnet run             # launch (Esc quits)
@@ -59,3 +64,7 @@ Spotify only lists devices that are running, and controlling playback needs Spot
 Notes on how the API behaves in practice (and where it differs from the specs): [docs/rvrb-api-notes.md](docs/rvrb-api-notes.md).
 
 API docs: [openapi.yaml](https://app.rvrb.one/api-docs/openapi.yaml) (REST), [asyncapi.yaml](https://app.rvrb.one/api-docs/asyncapi.yaml) (websocket).
+
+## License
+
+[MIT](LICENSE)
